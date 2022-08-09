@@ -94,18 +94,120 @@ class DuneAnalytics:
         else:
             logger.error(response.text)
 
-    def query_result_id(self, query_id):
+    def execute_query(self, query_id: int, parameters=None) -> str:
+        """Execute query by id
+        
+        :param query_id: provide the query_id
+        :type query_id: int
+        :param parameters: _description_, defaults to None
+        :type parameters: list, optional
+        :return: job_id associated with the execution
+        :rtype: str
+        """
+        if parameters:
+            query_variables = {"query_id": query_id, "parameters": parameters}
+        else:
+            query_variables = {"query_id": query_id}
+
+        query_data = {"operationName":"ExecuteQuery",
+                    "variables":query_variables,
+                    "query":"mutation ExecuteQuery($query_id: Int!, $parameters: [Parameter!]!) "
+                    "{\n  execute_query(query_id: $query_id, parameters: $parameters) "
+                    "{\n    job_id\n    __typename\n  }\n}\n"}
+
+        self.session.headers.update({'authorization': f'Bearer {self.token}'})
+
+        response = self.session.post(GRAPH_URL, json=query_data)
+        if response.status_code == 200:
+            data = response.json()
+            logger.debug(data)
+            job_id = data.get('data').get('execute_query').get('job_id')
+            return job_id
+        else:
+            logger.error(response.text)
+            return {}
+    
+    def get_job_queue_status(self, job_id: int) -> bool:
+        """Get the queue status of a execution job
+
+        :param job_id: job_id associated with an execution
+        :type job_id: int
+        :return: whether the job has been finished
+        :rtype: bool
+        """
+
+        query_data = {"operationName":"GetQueuePosition",
+            "variables":{"job_id":job_id},
+            "query":"query GetQueuePosition($job_id: uuid!) "
+                "{\n  view_queue_positions(where: {id: {_eq: $job_id}}) "
+                "{\n    pos\n    __typename\n  }\n  jobs_by_pk(id: $job_id) "
+                "{\n    id\n    user_id\n    category\n    created_at\n    locked_until\n    __typename\n  }\n}\n"}
+        
+        self.session.headers.update({'authorization': f'Bearer {self.token}'})
+
+        response = self.session.post(GRAPH_URL, json=query_data)
+        if response.status_code == 200:
+            data = response.json()
+            logger.debug(data)
+            if 'errors' in data:
+                logger.error(data.get('errors'))
+                return None
+            return data.get('data').get('jobs_by_pk') is None
+        else:
+            logger.error(response.text)
+            return None
+    
+    def find_result_by_job(self, job_id: str) -> dict:
+        """Fetch the result for a query by job_id
+
+        :param job_id: job id of the query
+        :type job_id: str
+        :return: result data
+        :rtype: dict
+        """
+        query_data = {"operationName":"FindResultDataByJob",
+            "variables":{"job_id":job_id},
+            "query":"query FindResultDataByJob($job_id: uuid!) "
+                "{\n  query_results(where: {job_id: {_eq: $job_id}}) "
+                "{\n    id\n    job_id\n    runtime\n    generated_at\n    columns\n    __typename\n  }\n  "
+            "query_errors(where: {job_id: {_eq: $job_id}}) "
+                "{\n    id\n    job_id\n    runtime\n    message\n    metadata\n    type\n    generated_at\n    __typename\n  }\n  "
+            "get_result_by_job_id(args: {want_job_id: $job_id}) "
+                "{\n    data\n    __typename\n  }\n}\n"
+            }
+
+        self.session.headers.update({'authorization': f'Bearer {self.token}'})
+
+        response = self.session.post(GRAPH_URL, json=query_data)
+        if response.status_code == 200:
+            data = response.json()
+            logger.debug(data)
+            if 'errors' in data:
+                logger.error(data.get('errors'))
+                return None
+            return data
+        else:
+            logger.error(response.text)
+            return None
+
+    def query_result_id(self, query_id: int, parameters=None):
         """
         Fetch the query result id for a query
-
         :param query_id: provide the query_id
+        :param parameters: (optional) list of parameter objects to customize the query
+            ex. [{"type": "data_type", "key": "key_name", "value": "value"}]
         :return:
         """
-        query_data = {"operationName": "GetResult", "variables": {"query_id": query_id},
-                      "query": "query GetResult($query_id: Int!, $parameters: [Parameter!]) "
-                               "{\n  get_result_v2(query_id: $query_id, parameters: $parameters) "
-                               "{\n    job_id\n    result_id\n    error_id\n    __typename\n  }\n}\n"
-                      }
+        if parameters:
+            query_variables = {"query_id": query_id, "parameters": parameters}
+        else:
+            query_variables = {"query_id": query_id}
+
+        query_data = {"operationName": "GetResult", "variables": query_variables,
+                "query": "query GetResult($query_id: Int!, $parameters: [Parameter!]) "
+                        "{\n  get_result_v2(query_id: $query_id, parameters: $parameters) "
+                        "{\n    job_id\n    result_id\n    error_id\n    __typename\n  }\n}\n"
+                }
 
         self.session.headers.update({'authorization': f'Bearer {self.token}'})
 
@@ -121,6 +223,7 @@ class DuneAnalytics:
         else:
             logger.error(response.text)
             return None
+    
 
     def query_result(self, result_id):
         """
